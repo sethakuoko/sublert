@@ -2,6 +2,7 @@
 # coding: utf-8
 # Announced and released during OWASP Seasides 2019 & NullCon.
 # Huge shout out to the Indian bug bounty community for their hospitality.
+# Modified to use Telegram instead of Slack
 
 import argparse
 import dns.resolver
@@ -24,7 +25,7 @@ else:
 from config import *
 import time
 
-version = "1.4.7"
+version = "1.4.7-telegram"
 requests.packages.urllib3.disable_warnings()
 
 def banner():
@@ -36,6 +37,7 @@ def banner():
                 /____/\__,_/_.___/_/\___/_/   \__/
     ''')
     print(colored("             Author: Yassine Aboukir (@yassineaboukir)", "red"))
+    print(colored("                  Modified for Telegram", "red"))
     print(colored("                           Version: {}", "red").format(version))
 
 def parse_args():
@@ -65,7 +67,7 @@ def parse_args():
                             const="True")
         parser.add_argument('-l', '--logging',
                             dest = "logging",
-                            help = "Enable Slack-based error logging.",
+                            help = "Enable Telegram-based error logging.",
                             required=False,
                             nargs='?',
                             const="True")
@@ -93,18 +95,28 @@ def domain_sanity_check(domain): #Verify the domain name sanity
     else:
         pass
 
-def slack(data): #posting to Slack
-    webhook_url = posting_webhook
-    slack_data = {'text': data}
+def telegram(data): #posting to Telegram
+    bot_token = telegram_bot_token
+    chat_id = telegram_chat_id
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    
+    telegram_data = {
+        'chat_id': chat_id,
+        'text': data,
+        'parse_mode': 'Markdown'
+    }
+    
     response = requests.post(
-                        webhook_url,
-                        data = json.dumps(slack_data),
-                        headers = {'Content-Type': 'application/json'}
-                            )
+        url,
+        data = json.dumps(telegram_data),
+        headers = {'Content-Type': 'application/json'}
+    )
+    
     if response.status_code != 200:
-        error = "Request to slack returned an error {}, the response is:\n{}".format(response.status_code, response.text)
+        error = "Request to Telegram returned an error {}, the response is:\n{}".format(response.status_code, response.text)
         errorlog(error, enable_logging)
-    if slack_sleep_enabled:
+    
+    if telegram_sleep_enabled:
         time.sleep(1)
 
 def reset(do_reset): #clear the monitored list of domains and remove all locally stored files
@@ -140,19 +152,27 @@ def domains_listing(): #list all the monitored domains
                 print(colored("{}".format(domain.replace("\n", "")), "yellow"))
         sys.exit(1)
 
-def errorlog(error, enable_logging): #log errors and post them to slack channel
+def errorlog(error, enable_logging): #log errors and post them to telegram channel
     if enable_logging:
-        print(colored("\n[!] We encountered a small issue, please check error logging slack channel.", "red"))
-        webhook_url = errorlogging_webhook
-        slack_data = {'text': '```' + error + '```'}
+        print(colored("\n[!] We encountered a small issue, please check error logging telegram channel.", "red"))
+        bot_token = telegram_error_bot_token
+        chat_id = telegram_error_chat_id
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        
+        telegram_data = {
+            'chat_id': chat_id,
+            'text': f'```\n{error}\n```',
+            'parse_mode': 'Markdown'
+        }
+        
         response = requests.post(
-                            webhook_url,
-                            data = json.dumps(slack_data),
-                            headers = {'Content-Type': 'application/json'}
-                                )
+            url,
+            data = json.dumps(telegram_data),
+            headers = {'Content-Type': 'application/json'}
+        )
+        
         if response.status_code != 200:
-            error = "Request to slack returned an error {}, the response is:\n{}".format(response.status_code, response.text)
-            errorlog(error, enable_logging)
+            print(colored("[!] Failed to send error log to Telegram", "red"))
     else: pass
 
 class cert_database(object): #Connecting to crt.sh public API to retrieve subdomains
@@ -332,14 +352,14 @@ def dns_resolution(new_subdomains): #Perform DNS resolution on retrieved subdoma
             dns_results[domain]["CNAME"] = eval('["There was an error while resolving."]')
             pass
     if dns_results:
-        return posting_to_slack(None, True, dns_results) #Slack new subdomains with DNS ouput
+        return posting_to_telegram(None, True, dns_results) #Telegram new subdomains with DNS ouput
     else:
-        return posting_to_slack(None, False, None) #Nothing found notification
+        return posting_to_telegram(None, False, None) #Nothing found notification
 
-def at_channel(): #control slack @channel
-    return("<!channel> " if at_channel_enabled else "")
+def mention_all(): #control telegram mention all (if needed)
+    return("" if not mention_all_enabled else "")  # Telegram doesn't have @channel equivalent by default
 
-def posting_to_slack(result, dns_resolve, dns_output): #sending result to slack workplace
+def posting_to_telegram(result, dns_resolve, dns_output): #sending result to telegram chat
     global domain_to_monitor
     global new_subdomains
     if dns_resolve:
@@ -347,7 +367,7 @@ def posting_to_slack(result, dns_resolve, dns_output): #sending result to slack 
         if dns_result:
             dns_result = {k:v for k,v in dns_result.items() if v} #filters non-resolving subdomains
             rev_url = []
-            print(colored("\n[!] Exporting result to Slack. Please do not interrupt!", "red"))
+            print(colored("\n[!] Exporting result to Telegram. Please do not interrupt!", "red"))
             for url in dns_result:
                 url = url \
                     .replace('*.', '') \
@@ -357,19 +377,19 @@ def posting_to_slack(result, dns_resolve, dns_output): #sending result to slack 
             unique_list = list(set(new_subdomains) & set(dns_result.keys())) #filters non-resolving subdomains from new_subdomains list
 
             for subdomain in unique_list:
-                data = "{}:new: {}".format(at_channel(), subdomain)
-                slack(data)
+                data = "{}🆕 *{}*".format(mention_all(), subdomain)
+                telegram(data)
                 try:
                     if dns_result[subdomain]["A"]:
                         for i in dns_result[subdomain]["A"]:
-                            data = "```A : {}```".format(i)
-                            slack(data)
+                            data = "```\nA : {}\n```".format(i)
+                            telegram(data)
                 except: pass
                 try:
                     if dns_result[subdomain]['CNAME']:
                         for i in dns_result[subdomain]['CNAME']:
-                            data = "```CNAME : {}```".format(i)
-                            slack(data)
+                            data = "```\nCNAME : {}\n```".format(i)
+                            telegram(data)
                 except: pass
             print(colored("\n[!] Done. ", "green"))
             rev_url = list(set(rev_url))
@@ -380,12 +400,12 @@ def posting_to_slack(result, dns_resolve, dns_output): #sending result to slack 
 
     elif result:
         rev_url = []
-        print(colored("\n[!] Exporting the result to Slack. Please don't interrupt!", "red"))
+        print(colored("\n[!] Exporting the result to Telegram. Please don't interrupt!", "red"))
         for url in result:
             url = "https://" + url.replace('+ ', '')
             rev_url.append(get_fld(url))
-            data = "{}:new: {}".format(at_channel(), url)
-            slack(data)
+            data = "{}🆕 *{}*".format(mention_all(), url)
+            telegram(data)
         print(colored("\n[!] Done. ", "green"))
         rev_url = list(set(rev_url))
 
@@ -396,8 +416,8 @@ def posting_to_slack(result, dns_resolve, dns_output): #sending result to slack 
 
     else:
         if not domain_to_monitor:
-            data = "{}:-1: We couldn't find any new valid subdomains.".format(at_channel())
-            slack(data)
+            data = "{}❌ We couldn't find any new valid subdomains.".format(mention_all())
+            telegram(data)
             print(colored("\n[!] Done. ", "green"))
             os.system("rm -f ./output/*_tmp.txt")
         else: pass
@@ -456,5 +476,5 @@ if __name__ == '__main__':
         if (dns_resolve and new_subdomains):
             dns_resolution(new_subdomains)
         else:
-            posting_to_slack(new_subdomains, False, None)
+            posting_to_telegram(new_subdomains, False, None)
     else: pass
